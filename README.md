@@ -120,6 +120,8 @@ The judge worked in two steps. First it read each text without the source materi
 
 The judge preferred the text with the skill in each of the five tasks. The texts with the skill got more points for the answer at the start in all five tasks, and more points for the statement of what was verified in four tasks. In four tasks, they had fewer terms that the judge could not decode.
 
+Version 0.1.1 changes one paragraph of rule 1. The agent now judges from the questions, the instructions, and the words of the reader whether the reader knows a term, and it does not ask the reader. We did not run the tests again for this change.
+
 ### Known weak point
 
 A text with the skill can be longer than the reader needs. In the table, the report for a user who is not a developer is about 1.9 times as long as the text without the skill, and the judge found facts that the report states two times.

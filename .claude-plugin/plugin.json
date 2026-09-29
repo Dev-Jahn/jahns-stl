@@ -1,6 +1,6 @@
 {
   "name": "jahns-stl",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Simplified Technical Language for LLM agents: one skill that keeps reports, plans, design documents, and instructions free of invented jargon and easy to read, in any language.",
   "author": {
     "name": "Jahn",

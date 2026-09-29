@@ -46,7 +46,7 @@ If the text needs the term, one of these must own it:
 
 If nothing owns the term, it is a private word. The typical case is a label that you made during the work. A phrase such as "step 4" or "the error above" is private too, if the reader never saw that thing. Do not search for a better label. Describe the thing in plain words. If the text needs the thing many times, define one label once and keep it.
 
-Then ask: does this reader know the term? If not, explain it once in plain words. For a name from the code, say what the thing does, because the name tells only where the thing is. If the reader already knows the term, do not explain it. An explanation that the reader does not need treats the reader as a beginner.
+Then judge whether this reader knows the term. Do not ask the reader. Judge it from the questions, the instructions, and the words of the reader, and from what your memory holds about the reader. If the reader does not know the term, explain it once in plain words. For a name from the code, say what the thing does, because the name tells only where the thing is. If the reader already knows the term, do not explain it. An explanation that the reader does not need treats the reader as a beginner.
 
 - Bad: "The warm route now skips the second sweep, so the drift is gone."
 - Good: "When the cache answers a request, the server no longer checks the rows for duplicates a second time. I compared the totals on the dashboard with the database, and they now match."
