@@ -165,6 +165,8 @@ To release a new version, set the same new version in `.claude-plugin/plugin.jso
 
 After the push, the CI checks the two manifests and the skill file, and it checks that Claude Code and Codex both accept the plugin. If all checks pass, the CI updates the entry of `jahns-stl` in both marketplaces: `Dev-Jahn/jahns-cc-marketplace` for Claude Code and `Dev-Jahn/jahns-codex-marketplace` for Codex. The entry then points to the new commit on `main` and copies the version and the description from the manifest. If a check fails, the CI does not change the marketplaces.
 
+The update of the marketplaces needs two secrets in this repository: `MARKETPLACE_DEPLOY_KEY` and `CODEX_MARKETPLACE_DEPLOY_KEY`. Each secret is the private part of a deploy key that has write access to one marketplace repository. Each marketplace must already have an entry with the name `jahns-stl`. If the entry is missing, the CI fails and does not create the entry.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
