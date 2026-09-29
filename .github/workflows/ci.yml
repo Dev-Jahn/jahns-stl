@@ -1,0 +1,257 @@
+name: CI
+
+# validate: checks the manifests, the skill file, and that both Claude Code and Codex accept the plugin.
+# sync:     when main moves, copy this repo's main sha plus the manifest version and description into
+#           the entry named jahns-stl of each of the two marketplaces (one matrix entry per marketplace).
+#           A deploy key limited to that marketplace repository does the write (private key in the
+#           secret, public key registered there with write).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The newest run wins, so an older run can never pin an old commit after a newer run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check the two manifests
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          claude_manifest=.claude-plugin/plugin.json
+          codex_manifest=.codex-plugin/plugin.json
+          # Semantic Versioning 2.0.0, the pattern published on semver.org.
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*))?(\+([0-9a-zA-Z-]+(\.[0-9a-zA-Z-]+)*))?$'
+          for manifest in "$claude_manifest" "$codex_manifest"; do
+            [ -f "$manifest" ] || fail "$manifest is missing"
+            jq -e . "$manifest" >/dev/null 2>&1 || fail "$manifest is not valid JSON"
+            jq -e '.name == "jahns-stl"' "$manifest" >/dev/null \
+              || fail "$manifest: name must be \"jahns-stl\", found $(jq -c .name "$manifest")"
+            jq -e --arg re "$semver" '.version | type == "string" and test($re)' "$manifest" >/dev/null \
+              || fail "$manifest: version must be a semantic version such as 1.2.3, found $(jq -c .version "$manifest")"
+            jq -e '.description | type == "string" and test("\\S")' "$manifest" >/dev/null \
+              || fail "$manifest: description must be a non-empty string, found $(jq -c .description "$manifest")"
+          done
+          jq -n -e --slurpfile a "$claude_manifest" --slurpfile b "$codex_manifest" \
+            '$a[0].version == $b[0].version' >/dev/null \
+            || fail "the two manifests have different versions: $claude_manifest has $(jq -c .version "$claude_manifest"), $codex_manifest has $(jq -c .version "$codex_manifest")"
+          jq -n -e --slurpfile a "$claude_manifest" --slurpfile b "$codex_manifest" \
+            '$a[0].description == $b[0].description' >/dev/null \
+            || fail "the two manifests have different descriptions: $claude_manifest has $(jq -c .description "$claude_manifest"), $codex_manifest has $(jq -c .description "$codex_manifest")"
+          echo "manifests ok: jahns-stl $(jq -r .version "$claude_manifest") in both"
+
+      - name: Check the skill file
+        run: |
+          set -euo pipefail
+          venv="$RUNNER_TEMP/skill-check-venv"
+          python3 -m venv "$venv"
+          "$venv/bin/pip" install --quiet --disable-pip-version-check pyyaml \
+            || { echo "::error::pip could not install PyYAML"; exit 1; }
+          "$venv/bin/python" - <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          SKILL_FILE = Path("skills/jahns-stl/SKILL.md")
+          # After a context summary, Claude Code attaches only the first 5,000 tokens of a skill again.
+          # Measured in Claude Code 2.1.284: a skill file of 13,014 bytes added about 4,300 tokens,
+          # so 14,000 bytes is about 4,600 tokens and keeps the whole file inside that limit.
+          MAX_SKILL_BYTES = 14000
+          MAX_DESCRIPTION_CHARS = 1024
+
+
+          def fail(message):
+              print(f"::error file={SKILL_FILE}::{' '.join(str(message).split())}")
+              sys.exit(1)
+
+
+          if not SKILL_FILE.is_file():
+              fail(f"{SKILL_FILE} is missing")
+
+          raw = SKILL_FILE.read_bytes()
+          if len(raw) > MAX_SKILL_BYTES:
+              fail(f"the file is {len(raw)} bytes; the limit is {MAX_SKILL_BYTES} bytes")
+          try:
+              text = raw.decode("utf-8")
+          except UnicodeDecodeError as error:
+              fail(f"the file is not valid UTF-8: {error}")
+
+          lines = text.splitlines()
+          if not lines or lines[0].rstrip() != "---":
+              fail("the file must start with YAML frontmatter; the first line must be '---'")
+          closing = next((i for i, line in enumerate(lines) if i > 0 and line.rstrip() == "---"), None)
+          if closing is None:
+              fail("the YAML frontmatter is not closed; a line with only '---' must follow it")
+          try:
+              meta = yaml.safe_load("\n".join(lines[1:closing]))
+          except yaml.YAMLError as error:
+              fail(f"the YAML frontmatter does not parse (put a value in double quotes if it starts with * or & or contains ': '): {error}")
+          if not isinstance(meta, dict):
+              fail("the YAML frontmatter must be a mapping with the keys name and description")
+          if meta.get("name") != "jahns-stl":
+              fail(f"name must be 'jahns-stl', found {meta.get('name')!r}")
+          description = meta.get("description")
+          if not isinstance(description, str) or not description.strip():
+              fail(f"description must be a non-empty string, found {description!r}")
+          if len(description) > MAX_DESCRIPTION_CHARS:
+              fail(f"description has {len(description)} characters; the limit is {MAX_DESCRIPTION_CHARS}")
+          print(f"{SKILL_FILE} ok: {len(raw)} bytes, description {len(description)} characters")
+          PY
+
+      - name: Install the Claude Code CLI
+        run: |
+          set -euo pipefail
+          npm install --global @anthropic-ai/claude-code \
+            || { echo "::error::npm could not install @anthropic-ai/claude-code"; exit 1; }
+
+      - name: Check the plugin with Claude Code
+        run: |
+          set -euo pipefail
+          # Needs no login.
+          claude plugin validate . \
+            || { echo "::error::claude plugin validate rejected the plugin (see the messages above)"; exit 1; }
+
+      - name: Install the Codex CLI
+        run: |
+          set -euo pipefail
+          npm install --global @openai/codex@0.156.1 \
+            || { echo "::error::npm could not install @openai/codex@0.156.1"; exit 1; }
+
+      - name: Check the plugin with Codex
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          # Needs no login. Codex reads and writes only this throwaway home.
+          export CODEX_HOME="$RUNNER_TEMP/codex-home"
+          market="$RUNNER_TEMP/ci-marketplace"
+          mkdir -p "$CODEX_HOME" "$market/.agents/plugins" "$market/jahns-stl"
+          # A throwaway local marketplace that wraps this checkout as the plugin jahns-stl.
+          cp -R "$GITHUB_WORKSPACE/." "$market/jahns-stl/"
+          rm -rf "$market/jahns-stl/.git"
+          cat > "$market/.agents/plugins/marketplace.json" <<'JSON'
+          {
+            "name": "ci-local",
+            "plugins": [
+              {
+                "name": "jahns-stl",
+                "source": { "source": "local", "path": "./jahns-stl" },
+                "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+                "category": "Productivity"
+              }
+            ]
+          }
+          JSON
+          codex plugin marketplace add "$market" \
+            || fail "codex could not add the temporary local marketplace $market"
+          install=$(codex plugin add jahns-stl@ci-local --json) \
+            || fail "codex could not install jahns-stl@ci-local"
+          jq -e '.name == "jahns-stl" and .pluginId == "jahns-stl@ci-local"' <<<"$install" >/dev/null \
+            || fail "codex installed something other than jahns-stl@ci-local: $install"
+          installed_path=$(jq -r .installedPath <<<"$install")
+          [ -f "$installed_path/.codex-plugin/plugin.json" ] \
+            || fail "the installed plugin has no .codex-plugin/plugin.json under $installed_path"
+          [ -f "$installed_path/skills/jahns-stl/SKILL.md" ] \
+            || fail "the installed plugin has no skills/jahns-stl/SKILL.md under $installed_path"
+          # "plugin add" copies files without reading SKILL.md. This proves Codex can parse the file
+          # and puts the skill in the list that the model sees.
+          # The output is read to the end (no "grep -q") so that "pipefail" cannot fail on a closed pipe.
+          prompt=$(codex debug prompt-input "hi") \
+            || fail "codex debug prompt-input failed"
+          jq -r '.. | strings' <<<"$prompt" | grep '^- jahns-stl:jahns-stl: ' >/dev/null \
+            || fail "Codex does not list the skill jahns-stl:jahns-stl; check the frontmatter of skills/jahns-stl/SKILL.md"
+          echo "codex ok: skill jahns-stl:jahns-stl is installed and listed"
+
+  sync:
+    name: Sync the ${{ matrix.host }} marketplace
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    strategy:
+      # One marketplace failing must not hide the result of the other.
+      fail-fast: false
+      matrix:
+        include:
+          - host: Claude Code
+            repo: Dev-Jahn/jahns-cc-marketplace
+            file: .claude-plugin/marketplace.json
+            manifest: .claude-plugin/plugin.json
+            secret: MARKETPLACE_DEPLOY_KEY
+          - host: Codex
+            repo: Dev-Jahn/jahns-codex-marketplace
+            file: .agents/plugins/marketplace.json
+            manifest: .codex-plugin/plugin.json
+            secret: CODEX_MARKETPLACE_DEPLOY_KEY
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # The matrix values reach the scripts only through env, never inside the script text.
+      - name: Configure the deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets[matrix.secret] }}
+          SECRET_NAME: ${{ matrix.secret }}
+          MARKETPLACE_REPO: ${{ matrix.repo }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::The secret $SECRET_NAME is empty or not set. Add the private deploy key of $MARKETPLACE_REPO (with write access) as a secret of this repository."
+            exit 1
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Pin sha, version, and description in the ${{ matrix.host }} marketplace
+        env:
+          HOST: ${{ matrix.host }}
+          MARKETPLACE_REPO: ${{ matrix.repo }}
+          MARKETPLACE_FILE: ${{ matrix.file }}
+          PLUGIN_MANIFEST: ${{ matrix.manifest }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version "$PLUGIN_MANIFEST")
+          description=$(jq -r .description "$PLUGIN_MANIFEST")
+          short_sha=${GITHUB_SHA:0:7}
+          clone="$RUNNER_TEMP/marketplace"
+          # Other plugins push to the same repository, so a push can be rejected because the remote
+          # moved. Every attempt starts from a fresh clone and applies the change again.
+          for attempt in 1 2 3; do
+            rm -rf "$clone"
+            git clone --quiet "git@github.com:${MARKETPLACE_REPO}.git" "$clone"
+            # A missing entry would end as a silent success (no diff), so fail loudly instead.
+            jq -e '.plugins[] | select(.name=="jahns-stl")' "$clone/$MARKETPLACE_FILE" >/dev/null \
+              || { echo "::error::$MARKETPLACE_FILE in the $HOST marketplace ($MARKETPLACE_REPO) has no plugin entry named 'jahns-stl', so there is nothing to pin"; exit 1; }
+            jq --indent 2 --arg sha "$GITHUB_SHA" --arg ver "$version" --arg desc "$description" \
+              '(.plugins[] | select(.name=="jahns-stl")) |= (.source.sha = $sha | .version = $ver | .description = $desc)' \
+              "$clone/$MARKETPLACE_FILE" > "$clone/$MARKETPLACE_FILE.new"
+            mv "$clone/$MARKETPLACE_FILE.new" "$clone/$MARKETPLACE_FILE"
+            if git -C "$clone" diff --quiet -- "$MARKETPLACE_FILE"; then
+              echo "$HOST marketplace already in sync at ${GITHUB_SHA} @ v${version}, nothing to do."
+              exit 0
+            fi
+            git -C "$clone" config user.name "jahns-stl-ci"
+            git -C "$clone" config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C "$clone" add -- "$MARKETPLACE_FILE"
+            git -C "$clone" commit -qm "chore(jahns-stl): sync v${version} @ ${short_sha} (auto-sync from main)"
+            if git -C "$clone" push origin HEAD:main; then
+              echo "$HOST marketplace updated to v${version} @ ${short_sha}"
+              exit 0
+            fi
+            echo "::warning::push attempt ${attempt} of 3 failed; the $HOST marketplace may have changed since the clone"
+          done
+          echo "::error::the push to $MARKETPLACE_REPO failed 3 times; see the git messages above (another push kept getting in first, or the deploy key has no write access)"
+          exit 1

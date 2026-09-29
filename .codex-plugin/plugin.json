@@ -1,0 +1,38 @@
+{
+  "name": "jahns-stl",
+  "version": "0.1.0",
+  "description": "Simplified Technical Language for LLM agents: one skill that keeps reports, plans, design documents, and instructions free of invented jargon and easy to read, in any language.",
+  "author": {
+    "name": "Jahn",
+    "email": "ajh508@naver.com"
+  },
+  "homepage": "https://github.com/Dev-Jahn/jahns-stl",
+  "repository": "https://github.com/Dev-Jahn/jahns-stl",
+  "license": "MIT",
+  "keywords": [
+    "writing",
+    "plain-language",
+    "technical-writing",
+    "readability",
+    "jargon",
+    "style-guide",
+    "skill"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Jahn's STL",
+    "shortDescription": "Plain, jargon-free writing for LLM agents",
+    "longDescription": "One skill that applies each time an agent writes natural language instead of code. It keeps reports, plans, design documents, and instructions free of invented jargon and easy to read, in any language.",
+    "developerName": "Jahn",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Rewrite this text so a new reader understands it on the first read.",
+      "Find the invented jargon in this plan and replace it with plain words.",
+      "Write the report of this task in simple, clear language."
+    ]
+  }
+}
